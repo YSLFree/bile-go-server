@@ -1,2 +1,17 @@
 ###
-GET http://www.baidu.com/
+POST  http://127.0.0.1:8080/register
+Content-Type: application/x-www-form-urlencoded
+auth:12
+
+account=ysl
+&password=ysl123
+
+###
+POST  http://127.0.0.1:8080/login
+Content-Type: application/x-www-form-urlencoded
+auth:12
+usertoken:e7991983804cd1852b7030890aff8940
+devicetoken:xiaomi
+
+account=ysl
+&password=ysl123

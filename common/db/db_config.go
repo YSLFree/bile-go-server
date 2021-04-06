@@ -9,6 +9,7 @@ const (
 	DBName string = "bile"
 	//DbSet .
 	DbSet string = "?charset=utf8mb4"
+	MYSQL_DNS string="root:123456@tcp(127.0.0.1:3306)/bile?charset=utf8mb4"
 )
 
 //SQL sql语句接口

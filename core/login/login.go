@@ -1,67 +1,164 @@
-package Login
+package login
 
 import (
+	"bile-go-server/code"
+	"bile-go-server/common/datautil"
 	"bile-go-server/common/db"
-	"bile-go-server/common/nets"
-	users_info "bile-go-server/users"
-	_ "database/sql"
+	"bile-go-server/entity"
 	"encoding/json"
-	_ "errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/jmoiron/sqlx"
+	"github.com/gomodule/redigo/redis"
 )
 
-var Db *sqlx.DB
-var err error
-var sqls *db.SQL
-var dbEnable bool
-
-//LoginHandler 登录
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
-	var data users_info.ResultData
-	if er := r.ParseForm(); er != nil {
-		data.Code = nets.ParamsFormErrorFormClient
+//LoginHandle 登录
+func LoginHandle(w http.ResponseWriter, r *http.Request) {
+	var data = new(entity.BaseEntity)
+	enc := json.NewEncoder(w)
+	r.ParseForm()
+	userToken := r.Header.Get("usertoken")
+	deviceToekn := r.Header.Get("devicetoken")
+	if db.GetMysqlCon() == nil {
+		data.Code = code.StatusFailed
 		data.State = false
-		data.Data = "服务器解析来自客户端的参数时错误"
-		_, err := json.Marshal(data)
-		if err != nil {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(err.Error()))
-			return
+		data.Data = "服务端数据库异常"
+		enc.Encode(data)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		//types := r.Header.Get("Content-Type")
+		if len(userToken) > 0 { //token存在，就用token登录
+			if len(deviceToekn) < 0 {
+				data.Code = code.StatusIdentityExpired
+				data.State = true
+				data.Data = "无效身份"
+				enc.Encode(data)
+				return
+			} else {
+				//根据token查找redis中是否缓存用户信息，有就直接去除返回给用户，没有就在mysql中查询
+				result, err := redis.String(db.GetRedisCon().Do("GET", userToken))
+				if err == nil && len(result) > 0 { //查询到了用户信息
+				    userInfo :=new (entity.UserInfos)
+					json.Unmarshal([]byte(result),userInfo)
+					data.Code = code.StatusSuccess
+					data.State = true
+					data.Data = userInfo
+					enc.Encode(data)
+					db.GetRedisCon().Close()
+					return
+				}
+				//redis中没有查询到用户信息，在mysql中查询
+				sqlQuer := "select * from logininfo where usertoken=? and devicetoken=?"
+				var queryData = new(entity.Login)
+				err = db.GetMysqlCon().Get(queryData, sqlQuer, userToken, deviceToekn)
+				if err == nil { //查询到用户信息
+					sqlUser := "select * from user_info where user_id=?"
+					var userInfo = new(entity.UserInfos)
+					err := db.GetMysqlCon().Get(userInfo, sqlUser, queryData.User_Id)
+					if err == nil {
+						data.Code = code.StatusSuccess
+						data.State = true
+						data.Data = userInfo
+						enc.Encode(data)
+						byt, e := json.Marshal(userInfo)
+						s := string(byt)
+						fmt.Println(s)
+						if e == nil {
+							db.GetRedisCon().Do("SET", userToken, s)
+						}
+						db.GetRedisCon().Close()
+						return
+					} else {
+						data.Code = code.StatusQueryDataError
+						data.State = true
+						data.Data = "查询数据异常"
+						enc.Encode(data)
+						return
+					}
+				} else { //未查询到用户信息
+					data.Code = code.StatusTokenInvalid
+					data.State = true
+					data.Data = "身份过期请重新登录"
+					enc.Encode(data)
+				}
+			}
+		} else { //用户密码登录
+			account := r.Form.Get("account")
+			password := r.Form.Get("password")
+			if datautil.VerifyMobileFormat(account) {
+				data.Code = code.StatusFailed
+				data.State = true
+				data.Data = "请输入合法的手机号码"
+				enc.Encode(data)
+				return
+			}
+			if len(password) < 6 {
+				data.Code = code.StatusFailed
+				data.State = true
+				data.Data = "密码长度不能小于6"
+				enc.Encode(data)
+				return
+			}
+			isV := strings.Contains(account, "#") ||
+				strings.Contains(account, " ") ||
+				strings.Contains(account, "or") ||
+				strings.Contains(account, "==") ||
+				strings.Contains(password, "#") ||
+				strings.Contains(password, " ") ||
+				strings.Contains(password, "or") ||
+				strings.Contains(password, "==")
+
+			if isV {
+				data.Code = code.StatusFailed
+				data.State = true
+				data.Data = "请不要输入非法字符"
+				enc.Encode(data)
+				return
+			}
+			sqlQuer := "select * from logininfo where account=? and password=?"
+			var queryData = new(entity.Login)
+			er := db.GetMysqlCon().Get(queryData, sqlQuer, account, password)
+			if er == nil { //查询到用户
+				sqlUser := "select * from user_info where user_id=?"
+				var userInfo = new(entity.UserInfos)
+				err := db.GetMysqlCon().Get(userInfo, sqlUser, queryData.User_Id)
+				if err == nil {
+					data.Code = code.StatusSuccess
+					data.State = true
+					data.Data = userInfo
+					enc.Encode(data) //查询成功后，将用户信息返回
+					//更新token到用户登录表中
+					tx, _ := db.GetMysqlCon().Begin()
+					updateLoinInfo := "update logininfo set usertoken=? ,devicetoken=? where user_id=?"
+					userToken = datautil.CreateMD5(account + time.Now().String())
+					res, err := tx.Exec(updateLoinInfo, userToken, deviceToekn, userInfo.User_Id)
+					if err != nil {
+						data.Code = code.StatusFailed
+						data.State = true
+						data.Data = err.Error()
+						enc.Encode(data)
+						tx.Rollback()
+						return
+					}
+					res.RowsAffected()
+					tx.Commit()
+					return
+				}
+			} else { //未查询到yong hu
+				data.Code = code.StatusAccountError
+				data.State = true
+				data.Data = "用户名或密码错误"
+				enc.Encode(data)
+			}
 		}
-
-	} //解析参数，默认不会解析
-	if r.Method == "GET" { //客户端get请求
-		account := r.FormValue("username")
-		password := r.FormValue("password")
-		fmt.Printf("from GET %v,%T", account, account)
-		Login(account, password)
-	} else if r.Method == "POST" { //客户端post请求
-		account := r.FormValue("username")
-		password := r.FormValue("password")
-		fmt.Printf("from POST %v,%T", account, account)
-		Login(account, password)
+	} else {
+		data.Code = code.StatusFailed
+		data.State = true
+		data.Data = "request type error"
+		enc.Encode(data)
 	}
-	//验证用户名密码，如果成功则header里返回session，失败则返回StatusUnauthorized状态码
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("服务器连接成功\n"))
-}
-
-//Login 用户登陆
-func Login(account string, password string) (interface{}, error) {
-
-	res, err := Db.Exec(sqls.RegisterSQL(), account, password)
-	if err != nil {
-		fmt.Println("Register Error: " + err.Error())
-		return nil, err
-	}
-	id, _ := res.LastInsertId()
-	if id > 0 {
-
-	}
-	return nil, nil
 }

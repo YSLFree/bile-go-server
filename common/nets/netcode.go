@@ -14,5 +14,5 @@ const (
 	//UserExist 用户已经存在
 	UserExist = 0x0000005
 	//AccountFormatError 账号格式不正确
-	AccountFormatError=0x0000006
+	AccountFormatError = 0x0000006
 )
