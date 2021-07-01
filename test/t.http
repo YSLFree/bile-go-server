@@ -15,3 +15,9 @@ devicetoken:xiaomi
 
 account=ysl
 &password=ysl123
+
+###
+GET   223.72.214.87:5441
+
+###
+GET  http://localhost:8080

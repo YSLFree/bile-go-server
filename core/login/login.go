@@ -5,9 +5,12 @@ import (
 	"bile-go-server/common/datautil"
 	"bile-go-server/common/db"
 	"bile-go-server/entity"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +19,8 @@ import (
 
 //LoginHandle 登录
 func LoginHandle(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(3*time.Second)
+	fmt.Println("id=",GetGoroutineID())
 	var data = new(entity.BaseEntity)
 	enc := json.NewEncoder(w)
 	r.ParseForm()
@@ -42,8 +47,8 @@ func LoginHandle(w http.ResponseWriter, r *http.Request) {
 				//根据token查找redis中是否缓存用户信息，有就直接去除返回给用户，没有就在mysql中查询
 				result, err := redis.String(db.GetRedisCon().Do("GET", userToken))
 				if err == nil && len(result) > 0 { //查询到了用户信息
-				    userInfo :=new (entity.UserInfos)
-					json.Unmarshal([]byte(result),userInfo)
+					userInfo := new(entity.UserInfos)
+					json.Unmarshal([]byte(result), userInfo)
 					data.Code = code.StatusSuccess
 					data.State = true
 					data.Data = userInfo
@@ -142,6 +147,7 @@ func LoginHandle(w http.ResponseWriter, r *http.Request) {
 						data.Data = err.Error()
 						enc.Encode(data)
 						tx.Rollback()
+						fmt.Scan()
 						return
 					}
 					res.RowsAffected()
@@ -161,4 +167,12 @@ func LoginHandle(w http.ResponseWriter, r *http.Request) {
 		data.Data = "request type error"
 		enc.Encode(data)
 	}
+}
+func GetGoroutineID() uint64 {
+	b := make([]byte, 64)
+	runtime.Stack(b, false)
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	n, _ := strconv.ParseUint(string(b), 10, 64)
+	return n
 }
